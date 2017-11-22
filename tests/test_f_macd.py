@@ -8,6 +8,7 @@ def init(context):
     # context内引入全局变量s1，存储目标合约信息
     context.s1 = "IF88"
 
+
     # 使用MACD需要设置长短均线和macd平均线的参数
     context.SHORTPERIOD = 12
     context.LONGPERIOD = 26

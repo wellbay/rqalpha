@@ -14,31 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import six
 import time
 
-from ..const import ORDER_STATUS, SIDE, POSITION_EFFECT, ORDER_TYPE
-from ..utils import id_gen
-from ..utils.repr import property_repr, properties
-from ..utils.logger import user_system_log
-
-
-OrderPersistMap = {
-    "_order_id": "_order_id",
-    "_calendar_dt": "_calendar_dt",
-    "_trading_dt": "_trading_dt",
-    "_quantity": "_quantity",
-    "_order_book_id": "_order_book_id",
-    "_side": "_side",
-    "_position_effect": "_position_effect",
-    "_message": "_message",
-    "_filled_quantity": "_filled_quantity",
-    "_status": "_status",
-    "_frozen_price": "_frozen_price",
-    "_type": "_type",
-    "_avg_price": "_avg_price",
-    "_transaction_cost": "_transaction_cost",
-}
+from rqalpha.const import ORDER_STATUS, ORDER_TYPE, SIDE, POSITION_EFFECT
+from rqalpha.utils import id_gen
+from rqalpha.utils.repr import property_repr, properties
+from rqalpha.utils.logger import user_system_log
+from rqalpha.environment import Environment
 
 
 class Order(object):
@@ -63,12 +45,58 @@ class Order(object):
         self._avg_price = None
         self._transaction_cost = None
 
+    @staticmethod
+    def _enum_to_str(v):
+        return v.name
+
+    @staticmethod
+    def _str_to_enum(enum_class, s):
+        return enum_class.__members__[s]
+
+    def get_state(self):
+        return {
+            'order_id': self._order_id,
+            'calendar_dt': self._calendar_dt,
+            'trading_dt': self._trading_dt,
+            'order_book_id': self._order_book_id,
+            'quantity': self._quantity,
+            'side': self._enum_to_str(self._side),
+            'position_effect': self._enum_to_str(self._position_effect) if self._position_effect is not None else None,
+            'message': self._message,
+            'filled_quantity': self._filled_quantity,
+            'status': self._enum_to_str(self._status),
+            'frozen_price': self._frozen_price,
+            'type': self._enum_to_str(self._type),
+            'transaction_cost': self._transaction_cost,
+            'avg_price': self._avg_price,
+        }
+
+    def set_state(self, d):
+        self._order_id = d['order_id']
+        self._calendar_dt = d['calendar_dt']
+        self._trading_dt = d['trading_dt']
+        self._order_book_id = d['order_book_id']
+        self._quantity = d['quantity']
+        self._side = self._str_to_enum(SIDE, d['side'])
+        if d['position_effect'] is None:
+            self._position_effect = None
+        else:
+            self._position_effect = self._str_to_enum(POSITION_EFFECT, d['position_effect'])
+        self._message = d['message']
+        self._filled_quantity = d['filled_quantity']
+        self._status = self._str_to_enum(ORDER_STATUS, d['status'])
+        self._frozen_price = d['frozen_price']
+        self._type = self._str_to_enum(ORDER_TYPE, d['type'])
+        self._transaction_cost = d['transaction_cost']
+        self._avg_price = d['avg_price']
+
     @classmethod
-    def __from_create__(cls, calendar_dt, trading_dt, order_book_id, quantity, side, style, position_effect):
+    def __from_create__(cls, order_book_id, quantity, side, style, position_effect):
+        env = Environment.get_instance()
         order = cls()
         order._order_id = next(order.order_id_gen)
-        order._calendar_dt = calendar_dt
-        order._trading_dt = trading_dt
+        order._calendar_dt = env.calendar_dt
+        order._trading_dt = env.trading_dt
         order._quantity = quantity
         order._order_book_id = order_book_id
         order._side = side
@@ -86,164 +114,166 @@ class Order(object):
         order._transaction_cost = 0
         return order
 
-    @classmethod
-    def __from_dict__(cls, order_dict):
-        order = cls()
-        for persist_key, origin_key in six.iteritems(OrderPersistMap):
-            setattr(order, origin_key, order_dict[persist_key])
-        return order
-
-    def __to_dict__(self):
-        order_dict = {}
-        for persist_key, origin_key in six.iteritems(OrderPersistMap):
-            order_dict[persist_key] = getattr(self, origin_key)
-        return order_dict
-
     @property
     def order_id(self):
         """
-        【int】唯一标识订单的id
+        [int] 唯一标识订单的id
         """
         return self._order_id
 
     @property
     def trading_datetime(self):
         """
-        【datetime.datetime】订单的交易日期（对应期货夜盘）
+        [datetime.datetime] 订单的交易日期（对应期货夜盘）
         """
         return self._trading_dt
 
     @property
     def datetime(self):
         """
-        【datetime.datetime】订单创建时间
+        [datetime.datetime] 订单创建时间
         """
         return self._calendar_dt
 
     @property
     def quantity(self):
         """
-        【int】订单数量
+        [int] 订单数量
         """
         return self._quantity
 
     @property
     def unfilled_quantity(self):
         """
-        【int】订单未成交数量
+        [int] 订单未成交数量
         """
         return self._quantity - self._filled_quantity
 
     @property
     def order_book_id(self):
         """
-        【str】合约代码
+        [str] 合约代码
         """
         return self._order_book_id
 
     @property
     def side(self):
         """
-        【SIDE】订单方向
+        [SIDE] 订单方向
         """
         return self._side
 
     @property
     def position_effect(self):
         """
-        【POSITION_EFFECT】订单开平（期货专用）
+        [POSITION_EFFECT] 订单开平（期货专用）
         """
         return self._position_effect
 
     @property
     def message(self):
         """
-        【str】信息。比如拒单时候此处会提示拒单原因
+        [str] 信息。比如拒单时候此处会提示拒单原因
         """
         return self._message
 
     @property
     def filled_quantity(self):
         """
-        【int】订单已成交数量
+        [int] 订单已成交数量
         """
         return self._filled_quantity
 
     @property
     def status(self):
         """
-        【ORDER_STATUS】订单状态
+        [ORDER_STATUS] 订单状态
         """
         return self._status
 
     @property
     def price(self):
         """
-        【float】订单价格，只有在订单类型为'限价单'的时候才有意义
+        [float] 订单价格，只有在订单类型为'限价单'的时候才有意义
         """
         return 0 if self.type == ORDER_TYPE.MARKET else self._frozen_price
 
     @property
     def type(self):
         """
-        【ORDER_TYPE】订单类型
+        [ORDER_TYPE] 订单类型
         """
         return self._type
 
     @property
     def avg_price(self):
         """
-        【float】成交均价
+        [float] 成交均价
         """
         return self._avg_price
 
     @property
     def transaction_cost(self):
         """
-        【float】费用
+        [float] 费用
         """
         return self._transaction_cost
 
-    def _is_final(self):
-        if self.status == ORDER_STATUS.PENDING_NEW or self.status == ORDER_STATUS.ACTIVE:
-            return False
-        else:
-            return True
+    @property
+    def frozen_price(self):
+        """
+        [float] 冻结价格
+        """
+        return self._frozen_price
 
-    def _is_active(self):
+    def is_final(self):
+        return self._status not in {
+            ORDER_STATUS.PENDING_NEW,
+            ORDER_STATUS.ACTIVE,
+            ORDER_STATUS.PENDING_CANCEL
+        }
+
+    def is_active(self):
         return self.status == ORDER_STATUS.ACTIVE
 
-    def _active(self):
+    def active(self):
         self._status = ORDER_STATUS.ACTIVE
 
-    def _fill(self, trade):
-        amount = trade.last_quantity
-        assert self.filled_quantity + amount <= self.quantity
-        new_quantity = self._filled_quantity + amount
-        self._avg_price = (self._avg_price * self._filled_quantity + trade.last_price * amount) / new_quantity
+    def set_pending_cancel(self):
+        if not self.is_final():
+            self._status = ORDER_STATUS.PENDING_CANCEL
+
+    def fill(self, trade):
+        quantity = trade.last_quantity
+        assert self.filled_quantity + quantity <= self.quantity
+        new_quantity = self._filled_quantity + quantity
+        self._avg_price = (self._avg_price * self._filled_quantity + trade.last_price * quantity) / new_quantity
         self._transaction_cost += trade.commission + trade.tax
         self._filled_quantity = new_quantity
         if self.unfilled_quantity == 0:
             self._status = ORDER_STATUS.FILLED
 
-    def _mark_rejected(self, reject_reason):
-        if not self._is_final():
+    def mark_rejected(self, reject_reason):
+        if not self.is_final():
             self._message = reject_reason
             self._status = ORDER_STATUS.REJECTED
             user_system_log.warn(reject_reason)
 
-    def _mark_cancelled(self, cancelled_reason, user_warn=True):
-        if not self._is_final():
+    def mark_cancelled(self, cancelled_reason, user_warn=True):
+        if not self.is_final():
             self._message = cancelled_reason
             self._status = ORDER_STATUS.CANCELLED
             if user_warn:
                 user_system_log.warn(cancelled_reason)
 
+    def set_frozen_price(self, value):
+        self._frozen_price = value
+
     def __simple_object__(self):
         return properties(self)
 
 
-class OrderStyle:
+class OrderStyle(object):
     def get_limit_price(self):
         raise NotImplementedError
 

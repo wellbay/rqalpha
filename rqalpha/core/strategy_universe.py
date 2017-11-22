@@ -14,19 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
-
 import six
+import json
+import copy
 
-from ..events import EVENT, Event
-from ..environment import Environment
-from ..model.instrument import Instrument
+from rqalpha.events import EVENT, Event
+from rqalpha.environment import Environment
+from rqalpha.model.instrument import Instrument
 
 
 class StrategyUniverse(object):
     def __init__(self):
         self._set = set()
-        Environment.get_instance().event_bus.add_listener(EVENT.AFTER_TRADING, self._clear_de_listed)
+        Environment.get_instance().event_bus.prepend_listener(EVENT.AFTER_TRADING, self._clear_de_listed)
 
     def get_state(self):
         return json.dumps(sorted(self._set)).encode('utf-8')
@@ -38,18 +38,21 @@ class StrategyUniverse(object):
     def update(self, universe):
         if isinstance(universe, (six.string_types, Instrument)):
             universe = [universe]
-        self._set = set(universe)
-        Environment.get_instance().event_bus.publish_event(Event(EVENT.POST_UNIVERSE_CHANGED, universe=self._set))
+        new_set = set(universe)
+        if new_set != self._set:
+            self._set = new_set
+            Environment.get_instance().event_bus.publish_event(Event(EVENT.POST_UNIVERSE_CHANGED, universe=self._set))
 
     def get(self):
-        return self._set
+        return copy.copy(self._set)
 
     def _clear_de_listed(self, event):
         de_listed = set()
+        env = Environment.get_instance()
         for o in self._set:
-            i = Environment.get_instance().data_proxy.instruments(o)
-            if i.de_listed_date <= Environment.get_instance().trading_dt:
+            i = env.data_proxy.instruments(o)
+            if i.de_listed_date <= env.trading_dt:
                 de_listed.add(o)
         if de_listed:
             self._set -= de_listed
-            Environment.get_instance().event_bus.publish_event(Event(EVENT.POST_UNIVERSE_CHANGED, universe=self._set))
+            env.event_bus.publish_event(Event(EVENT.POST_UNIVERSE_CHANGED, universe=self._set))

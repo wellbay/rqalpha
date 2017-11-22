@@ -19,16 +19,12 @@ import json
 
 from dateutil.parser import parse
 
-from ..execution_context import ExecutionContext
-from ..utils.exception import patch_user_exc, ModifyExceptionFromType
-from ..const import EXC_TYPE, EXECUTION_PHASE
-from ..environment import Environment
-from ..events import EVENT
-
-try:
-    from inspect import signature
-except ImportError:
-    from funcsigs import signature
+from rqalpha.execution_context import ExecutionContext
+from rqalpha.environment import Environment
+from rqalpha.const import EXC_TYPE, EXECUTION_PHASE
+from rqalpha.events import EVENT
+from rqalpha.utils.py2 import signature
+from rqalpha.utils.exception import patch_user_exc, ModifyExceptionFromType
 
 
 def market_close(hour=0, minute=0):
@@ -131,6 +127,9 @@ class Scheduler(object):
         if time_rule == 'before_trading':
             return lambda: self._is_before_trading()
 
+        if time_rule is not None and not isinstance(time_rule, int):
+            raise patch_user_exc(ValueError('invalid time_rule, "before_trading" or int expected, got {}'.format(repr(time_rule))))
+
         time_rule = time_rule if time_rule else self._minutes_since_midnight(9, 31)
         return lambda: self._should_trigger(time_rule)
 
@@ -164,11 +163,15 @@ class Scheduler(object):
         _verify_function('run_monthly', func)
         if tradingday is None and 'monthday' in kwargs:
             tradingday = kwargs.pop('monthday')
+
         if kwargs:
             raise patch_user_exc(ValueError('unknown argument: {}'.format(kwargs)))
 
         if tradingday is None:
             raise patch_user_exc(ValueError('tradingday is required'))
+
+        if not isinstance(tradingday, int):
+            raise patch_user_exc(ValueError('tradingday: <int> excpected, {} got'.format(repr(tradingday))))
 
         if tradingday > 23 or tradingday < -23 or tradingday == 0:
             raise patch_user_exc(ValueError('invalid tradingday, should be in [-23, 0), (0, 23]'))
@@ -198,7 +201,7 @@ class Scheduler(object):
 
     def next_bar_(self, event):
         bars = event.bar_dict
-        with ExecutionContext(EXECUTION_PHASE.SCHEDULED, bars):
+        with ExecutionContext(EXECUTION_PHASE.SCHEDULED):
             self._current_minute = self._minutes_since_midnight(self._ucontext.now.hour, self._ucontext.now.minute)
             for day_rule, time_rule, func in self._registry:
                 if day_rule() and time_rule():
@@ -217,7 +220,7 @@ class Scheduler(object):
 
     def _fill_week(self):
         weekday = self._today.isoweekday()
-        weekend = self._today + datetime.timedelta(days=7-weekday)
+        weekend = self._today + datetime.timedelta(days=7 - weekday)
         week_start = weekend - datetime.timedelta(days=6)
 
         left = self._TRADING_DATES.searchsorted(week_start)
@@ -226,9 +229,9 @@ class Scheduler(object):
 
     def _fill_month(self):
         try:
-            month_end = self._today.replace(month=self._today.month+1, day=1)
+            month_end = self._today.replace(month=self._today.month + 1, day=1)
         except ValueError:
-            month_end = self._today.replace(year=self._today.year+1, month=1, day=1)
+            month_end = self._today.replace(year=self._today.year + 1, month=1, day=1)
 
         month_begin = self._today.replace(day=1)
         left, right = self._TRADING_DATES.searchsorted(month_begin), self._TRADING_DATES.searchsorted(month_end)

@@ -18,14 +18,17 @@ from __future__ import division
 import pprint
 import re
 import six
+import collections
 
 from contextlib import contextmanager
+import numpy as np
 
-from .exception import CustomError, CustomException
-from ..const import EXC_TYPE, INSTRUMENT_TYPE, ACCOUNT_TYPE, UNDERLYING_SYMBOL_PATTERN, NIGHT_TRADING_NS
-from ..utils.datetime_func import TimeRange
-from ..utils.default_future_info import STOCK_TRADING_PERIOD, TRADING_PERIOD_DICT
-from ..utils.i18n import gettext as _
+from rqalpha.utils.exception import CustomError, CustomException
+from rqalpha.const import EXC_TYPE, INSTRUMENT_TYPE, DEFAULT_ACCOUNT_TYPE, UNDERLYING_SYMBOL_PATTERN, NIGHT_TRADING_NS
+from rqalpha.utils.datetime_func import TimeRange
+from rqalpha.utils.default_future_info import STOCK_TRADING_PERIOD, TRADING_PERIOD_DICT
+from rqalpha.utils.i18n import gettext as _
+from rqalpha.utils.py2 import lru_cache
 
 
 def safe_round(value, ndigits=3):
@@ -44,9 +47,6 @@ class Singleton(type):
 
 
 class RqAttrDict(object):
-    '''
-    fuck attrdict
-    '''
 
     def __init__(self, d=None):
         self.__dict__ = d if d is not None else dict()
@@ -59,8 +59,41 @@ class RqAttrDict(object):
         return pprint.pformat(self.__dict__)
 
     def __iter__(self):
-        for k, v in six.iteritems(self.__dict__):
-            yield k, v
+        return self.__dict__.__iter__()
+
+    def update(self, other):
+        RqAttrDict._update_dict_recursive(self, other)
+
+    def items(self):
+        return six.iteritems(self.__dict__)
+
+    iteritems = items
+
+    def keys(self):
+        return self.__dict__.keys()
+
+    @staticmethod
+    def _update_dict_recursive(target, other):
+        if isinstance(other, RqAttrDict):
+            other = other.__dict__
+        if isinstance(target, RqAttrDict):
+            target = target.__dict__
+
+        for k, v in six.iteritems(other):
+            if isinstance(v, collections.Mapping):
+                r = RqAttrDict._update_dict_recursive(target.get(k, {}), v)
+                target[k] = r
+            else:
+                target[k] = other[k]
+        return target
+
+    def convert_to_dict(self):
+        result_dict = {}
+        for k, v in list(six.iteritems(self.__dict__)):
+            if isinstance(v, RqAttrDict):
+                v = v.convert_to_dict()
+            result_dict[k] = v
+        return result_dict
 
 
 def dummy_func(*args, **kwargs):
@@ -86,9 +119,9 @@ class Nop(object):
 
 
 def to_sector_name(s):
-    from ..model.instrument import SectorCode, SectorCodeItem
+    from rqalpha.model.instrument import SectorCode, SectorCodeItem
 
-    for _, v in six.iteritems(SectorCode.__dict__):
+    for __, v in six.iteritems(SectorCode.__dict__):
         if isinstance(v, SectorCodeItem):
             if v.cn == s or v.en == s or v.name == s:
                 return v.name
@@ -97,9 +130,9 @@ def to_sector_name(s):
 
 
 def to_industry_code(s):
-    from ..model.instrument import IndustryCode, IndustryCodeItem
+    from rqalpha.model.instrument import IndustryCode, IndustryCodeItem
 
-    for _, v in six.iteritems(IndustryCode.__dict__):
+    for __, v in six.iteritems(IndustryCode.__dict__):
         if isinstance(v, IndustryCodeItem):
             if v.name == s:
                 return v.code
@@ -140,14 +173,14 @@ def create_custom_exception(exc_type, exc_val, exc_tb, strategy_filename):
 
 
 def run_when_strategy_not_hold(func):
-    from ..environment import Environment
-    from ..utils.logger import system_log
+    from rqalpha.environment import Environment
+    from rqalpha.utils.logger import system_log
 
     def wrapper(*args, **kwargs):
-        if not Environment.get_instance().is_strategy_hold:
+        if not Environment.get_instance().config.extra.is_hold:
             return func(*args, **kwargs)
         else:
-            system_log.debug(_("not run {}({}, {}) because strategy is hold").format(func, args, kwargs))
+            system_log.debug(_(u"not run {}({}, {}) because strategy is hold").format(func, args, kwargs))
 
     return wrapper
 
@@ -178,6 +211,8 @@ def instrument_type_str2enum(type_str):
         return INSTRUMENT_TYPE.FENJI_A
     elif type_str == "FenjiB":
         return INSTRUMENT_TYPE.FENJI_B
+    elif type_str == 'PublicFund':
+        return INSTRUMENT_TYPE.PUBLIC_FUND
     else:
         raise NotImplementedError
 
@@ -189,24 +224,22 @@ INST_TYPE_IN_STOCK_ACCOUNT = [
     INSTRUMENT_TYPE.INDX,
     INSTRUMENT_TYPE.FENJI_MU,
     INSTRUMENT_TYPE.FENJI_A,
-    INSTRUMENT_TYPE.FENJI_B
+    INSTRUMENT_TYPE.FENJI_B,
+    INSTRUMENT_TYPE.PUBLIC_FUND
 ]
 
 
+@lru_cache(None)
 def get_account_type(order_book_id):
-    from ..execution_context import ExecutionContext
-    instrument = ExecutionContext.get_instrument(order_book_id)
+    from rqalpha.environment import Environment
+    instrument = Environment.get_instance().get_instrument(order_book_id)
     enum_type = instrument.enum_type
     if enum_type in INST_TYPE_IN_STOCK_ACCOUNT:
-        return ACCOUNT_TYPE.STOCK
+        return DEFAULT_ACCOUNT_TYPE.STOCK.name
     elif enum_type == INSTRUMENT_TYPE.FUTURE:
-        return ACCOUNT_TYPE.FUTURE
+        return DEFAULT_ACCOUNT_TYPE.FUTURE.name
     else:
         raise NotImplementedError
-
-
-def exclude_benchmark_generator(accounts):
-    return {k: v for k, v in six.iteritems(accounts) if k != ACCOUNT_TYPE.BENCHMARK}
 
 
 def get_upper_underlying_symbol(order_book_id):
@@ -233,13 +266,13 @@ def merge_trading_period(trading_period):
     return result
 
 
-def get_trading_period(universe, account_list):
+def get_trading_period(universe, accounts):
     trading_period = []
-    if ACCOUNT_TYPE.STOCK in account_list:
+    if DEFAULT_ACCOUNT_TYPE.STOCK.name in accounts:
         trading_period += STOCK_TRADING_PERIOD
 
     for order_book_id in universe:
-        if get_account_type(order_book_id) == ACCOUNT_TYPE.STOCK:
+        if get_account_type(order_book_id) == DEFAULT_ACCOUNT_TYPE.STOCK.name:
             continue
         underlying_symbol = get_upper_underlying_symbol(order_book_id)
         trading_period += TRADING_PERIOD_DICT[underlying_symbol]
@@ -257,7 +290,7 @@ def is_trading(dt, trading_period):
 
 @contextmanager
 def run_with_user_log_disabled(disabled=True):
-    from .logger import user_log
+    from rqalpha.utils.logger import user_log
 
     if disabled:
         user_log.disable()
@@ -276,3 +309,22 @@ def unwrapper(func):
         if f2 is None:
             break
     return f
+
+
+def is_run_from_ipython():
+    try:
+        __IPYTHON__
+        return True
+    except NameError:
+        return False
+
+
+def generate_account_type_dict():
+    account_type_dict = {}
+    for key, a_type in six.iteritems(DEFAULT_ACCOUNT_TYPE.__members__):
+        account_type_dict[key] = a_type.value
+    return account_type_dict
+
+
+def is_valid_price(price):
+    return not np.isnan(price) and price > 0

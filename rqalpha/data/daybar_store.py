@@ -16,6 +16,9 @@
 
 import bcolz
 import numpy as np
+import six
+
+from rqalpha.utils.i18n import gettext as _
 
 
 class DayBarStore(object):
@@ -35,7 +38,7 @@ class DayBarStore(object):
         try:
             s, e = self._index[order_book_id]
         except KeyError:
-            print('No data for {}'.format(order_book_id))
+            six.print_(_(u"No data for {}").format(order_book_id))
             return
 
         if fields is None:
@@ -51,10 +54,11 @@ class DayBarStore(object):
         dtype = np.dtype([('datetime', np.uint64)] +
                          [(f, self._converter.field_type(f, self._table.cols[f].dtype))
                           for f in fields])
-        result = np.empty(shape=(e-s, ), dtype=dtype)
+        result = np.empty(shape=(e - s, ), dtype=dtype)
         for f in fields:
-            result[f][:] = self._converter.convert(f, self._table.cols[f][s:e])
-        result['datetime'][:] = self._table.cols['date'][s:e].astype(np.uint64) * 1000000
+            result[f] = self._converter.convert(f, self._table.cols[f][s:e])
+        result['datetime'] = self._table.cols['date'][s:e]
+        result['datetime'] *= 1000000
 
         return result
 

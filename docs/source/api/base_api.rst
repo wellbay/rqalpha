@@ -22,8 +22,7 @@ init
 
     :example:
 
-    ..  code-block:: python3
-        :linenos:
+    ..  code-block:: python
 
         def init(context):
             # cash_limit的属性是根据用户需求自己定义的，你可以定义无限多种自己随后需要的属性，ricequant的系统默认只是会占用context.portfolio的关键字来调用策略的投资组合信息
@@ -46,8 +45,7 @@ handle_bar
 
     :example:
 
-    ..  code-block:: python3
-        :linenos:
+    ..  code-block:: python
 
         def handle_bar(context, bar_dict):
             # put all your algorithm main logic here.
@@ -71,8 +69,7 @@ before_trading
 
     :example:
 
-    ..  code-block:: python3
-        :linenos:
+    ..  code-block:: python
 
         def before_trading(context, bar_dict):
             logger.info("This is before trading")
@@ -97,61 +94,71 @@ after_trading
 ..  module:: rqalpha.api
     :synopsis: API
 
-order_shares - 指定股数交易（股票专用）
+🆕 order - 智能下单「通用」
+------------------------------------------------------
+
+.. autofunction:: order
+
+🆕 order_to - 智能下单「通用」
+------------------------------------------------------
+
+.. autofunction:: order_to
+
+order_shares - 指定股数交易「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_shares
 
 
-order_lots - 指定手数交易（股票专用）
+order_lots - 指定手数交易「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_lots
 
 
-order_value - 指定价值交易（股票专用）
+order_value - 指定价值交易「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_value
 
 
-order_percent - 一定比例下单（股票专用）
+order_percent - 一定比例下单「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_percent
 
 
-order_target_value - 目标价值下单（股票专用）
+order_target_value - 目标价值下单「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_target_value
 
 
-order_target_percent - 目标比例下单（股票专用）
+order_target_percent - 目标比例下单「股票专用」
 ------------------------------------------------------
 
 ..  autofunction:: order_target_percent
 
 
-buy_open - 买开（期货专用）
+buy_open - 买开「期货专用」
 ------------------------------------------------------
 
 ..  autofunction:: buy_open
 
 
-sell_close - 平买仓（期货专用）
+sell_close - 平买仓「期货专用」
 ------------------------------------------------------
 
 ..  autofunction:: sell_close
 
 
-sell_open - 卖开（期货专用）
+sell_open - 卖开「期货专用」
 ------------------------------------------------------
 
 ..  autofunction:: sell_open
 
 
-buy_close - 平卖仓（期货专用）
+buy_close - 平卖仓「期货专用」
 ------------------------------------------------------
 
 ..  autofunction:: buy_close
@@ -525,65 +532,6 @@ sector - 板块股票列表
         #INIT INFO
         #['002045.XSHE', '603099.XSHG', '002486.XSHE', '002536.XSHE', '300100.XSHE', '600633.XSHG', '002291.XSHE', ..., '600233.XSHG']
 
-concept - 概念股票列表
-------------------------------------------------------
-
-.. py:function:: concept(concept_name1, concept_name2, ...)
-
-    获取属于某个或某几个概念的股票列表。
-
-    :param concept_names: 概念名称。可以从概念列表中选择一个或多个概念填写
-        :type concept_names: str | 多个 str
-
-    :return: 属于该概念的股票 `order_book_id` 或者 list[`order_book_id`]
-
-    概念列表::
-
-        含H股        深圳本地        含B股        农村金融        东亚自贸        海工装备        绿色照明        稀土永磁        内贸规划        3D打印
-        页岩气        三网融合        风能概念        金融改革        猪肉            水域改革        风能            赛马概念        社保重仓        物联网
-        民营医院        黄河三角        固废处理        甲型流感        丝绸之路        融资融券        黄金概念        抗癌            国企改革        碳纤维
-        保障房        智能电网        石墨烯        空气治理        京津冀        分拆上市        装饰园林        振兴沈阳        智能家居        阿里概念
-        股期概念        新能源        生物疫苗        特斯拉        国产软件        互联金融        锂电池        保险重仓        粤港澳        自贸区
-        安防服务        广东自贸        汽车电子        超大盘        低碳经济        云计算        婴童概念        建筑节能        土地流转        智能机器
-        未股改        触摸屏        天津自贸        生物质能        前海概念        抗流感        卫星导航        多晶硅        出口退税        参股金融
-        准ST股        食品安全        智能穿戴        业绩预降        污水处理        重组概念        上海自贸        外资背景        信托重仓        本月解禁
-        体育概念        维生素        基金重仓        充电桩        IPV6概念        资产注入        生态农业        基因概念        图们江        O2O模式
-        铁路基建        摘帽概念        股权激励        电子支付        机器人概念    油气改革        风沙治理        央企50        水利建设        养老概念
-        QFII重仓        迪士尼        业绩预升        宽带提速        长株潭        超导概念        网络游戏        含可转债        4G概念        送转潜力
-        奢侈品        新三板        皖江区域        核电核能        海峡西岸        次新股        高校背景        券商重仓        基因测序        节能
-        三沙概念        日韩贸易        氢燃料        陕甘宁        文化振兴        民营银行        苹果概念        稀缺资源        基因芯片        循环经济
-        聚氨酯        金融参股        沿海发展        智能交通        海上丝路        ST板块        涉矿概念        蓝宝石        博彩概念        电商概念
-        整体上市        草甘膦        创投概念        超级细菌        信息安全        生物燃料        武汉规划        节能环保        成渝特区        军工航天
-        地热能        上海本地        生物育种        燃料电池        海水淡化
-
-    :example:
-
-        *   得到一个概念的股票列表:
-
-        ..   code-block:: python3
-        :linenos:
-
-            concept('民营医院')
-            #[Out]
-            #['600105.XSHG',
-            #'002550.XSHE',
-            #'002004.XSHE',
-            #'002424.XSHE',
-            #...]
-
-        *   得到某几个概念的股票列表:
-
-        ..   code-block:: python3
-        :linenos:
-
-            concept('民营医院', '国企改革')
-            #[Out]
-            #['601607.XSHG',
-            #'600748.XSHG',
-            #'600630.XSHG',
-            #...]
-
-
 
 history_bars - 某一合约历史数据
 ------------------------------------------------------
@@ -630,30 +578,12 @@ get_yield_curve - 收益率曲线
 is_suspended - 全天停牌判断
 ------------------------------------------------------
 
-..  py:function:: is_suspended(order_book_id, count)
-
-    判断某只股票是否全天停牌。
-
-    :param str order_book_id: 某只股票的代码或股票代码列表，可传入单只股票的order_book_id, symbol
-
-    :param int count: 回溯获取的数据个数。默认为当前能够获取到的最近的数据
-
-    :return: count为1时 `bool`; count>1时 `pandas.DataFrame`
+.. autofunction:: is_suspended(order_book_id)
 
 is_st_stock - ST股判断
 ------------------------------------------------------
 
-..  py:function:: is_st_stock(order_book_id, count=1)
-
-    判断一只或多只股票在一段时间内是否为ST股（包括ST与*ST）。
-
-    ST股是有退市风险因此风险比较大的股票，很多时候您也会希望判断自己使用的股票是否是'ST'股来避开这些风险大的股票。另外，我们目前的策略比赛也禁止了使用'ST'股。
-
-    :param str order_book_id: 某只股票的代码或股票代码列表，可传入单只股票的order_book_id, symbol
-
-    :param int count: 回溯获取的数据个数。默认为当前能够获取到的最近的数据
-
-    :return: count为1时 `bool`; count>1时 `pandas.DataFrame`
+.. autofunction:: is_st_stock(order_book_id)
 
 其他方法
 ======================================================
@@ -717,37 +647,39 @@ Order
     :show-inheritance:
     :inherited-members:
 
-MixedPortfolio
+Portfolio
 ------------------------------------------------------
-..  module:: rqalpha.model.account.mixed_account
 
-..  autoclass:: MixedPortfolio
+.. module:: rqalpha.model.portfolio
+
+.. autoclass:: Portfolio
     :members:
     :show-inheritance:
     :inherited-members:
 
-
-StockPortfolio
+StockAccount
 ------------------------------------------------------
-..  module:: rqalpha.model.portfolio.stock_portfolio
 
-..  autoclass:: StockPortfolio
+.. module:: rqalpha.mod.rqalpha_mod_sys_accounts.account_model.stock_account
+
+.. autoclass:: StockAccount
     :members:
     :show-inheritance:
     :inherited-members:
 
-FuturePortfolio
+FutureAccount
 ------------------------------------------------------
-..  module:: rqalpha.model.portfolio.future_portfolio
 
-..  autoclass:: FuturePortfolio
+.. module:: rqalpha.mod.rqalpha_mod_sys_accounts.account_model.future_account
+
+.. autoclass:: FutureAccount
     :members:
     :show-inheritance:
     :inherited-members:
 
 StockPosition
 ------------------------------------------------------
-..  module:: rqalpha.model.position.stock_position
+.. module:: rqalpha.mod.rqalpha_mod_sys_accounts.position_model.stock_position
 
 ..  autoclass:: StockPosition
     :members:
@@ -756,7 +688,7 @@ StockPosition
 
 FuturePosition
 ------------------------------------------------------
-..  module:: rqalpha.model.position.future_position
+.. module:: rqalpha.mod.rqalpha_mod_sys_accounts.position_model.future_position
 
 ..  autoclass:: FuturePosition
     :members:

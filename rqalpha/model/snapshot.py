@@ -18,7 +18,8 @@ import six
 import datetime
 import numpy as np
 
-from ..utils.datetime_func import convert_int_to_datetime
+from rqalpha.utils.datetime_func import convert_int_to_datetime, convert_ms_int_to_datetime
+from rqalpha.model.tick import Tick
 
 
 class SnapshotObject(object):
@@ -28,12 +29,12 @@ class SnapshotObject(object):
         ('high', np.float64),
         ('low', np.float64),
         ('last', np.float64),
-        ('volume', np.uint32),
-        ('total_turnover', np.uint64),
+        ('volume', np.int32),
+        ('total_turnover', np.int64),
         ('prev_close', np.float64)
     ]
 
-    _FUTURE_FIELDS = _STOCK_FIELDS + [('open_interest', np.uint32), ('prev_settlement', np.float64)]
+    _FUTURE_FIELDS = _STOCK_FIELDS + [('open_interest', np.int32), ('prev_settlement', np.float64)]
 
     _STOCK_FIELD_NAMES = [_n for _n, _ in _STOCK_FIELDS]
     _FUTURE_FIELD_NAMES = [_n for _n, _ in _FUTURE_FIELDS]
@@ -67,61 +68,65 @@ class SnapshotObject(object):
     @property
     def open(self):
         """
-        【float】当日开盘价
+        [float] 当日开盘价
         """
         return self._data["open"]
 
     @property
     def last(self):
         """
-        【float】当前最新价
+        [float] 当前最新价
         """
         return self._data["last"]
 
     @property
     def low(self):
         """
-        【float】截止到当前的最低价
+        [float] 截止到当前的最低价
         """
         return self._data["low"]
 
     @property
     def high(self):
         """
-        【float】截止到当前的最高价
+        [float] 截止到当前的最高价
         """
         return self._data["high"]
 
     @property
     def prev_close(self):
         """
-        【float】昨日收盘价
+        [float] 昨日收盘价
         """
         return self._data['prev_close']
 
     @property
     def volume(self):
         """
-        【float】截止到当前的成交量
+        [float] 截止到当前的成交量
         """
         return self._data['volume']
 
     @property
     def total_turnover(self):
         """
-        【float】截止到当前的成交额
+        [float] 截止到当前的成交额
         """
         return self._data['total_turnover']
 
     @property
     def datetime(self):
         """
-        【datetime.datetime】当前快照数据的时间戳
+        [datetime.datetime] 当前快照数据的时间戳
         """
         if self._dt is not None:
             return self._dt
         if not self.isnan:
-            return convert_int_to_datetime(self._data['datetime'])
+            dt = self._data['datetime']
+            if dt > 10000000000000000:  # ms
+                return convert_ms_int_to_datetime(dt)
+            else:
+                return convert_int_to_datetime(dt)
         return datetime.datetime.min
 
     @property
@@ -131,21 +136,21 @@ class SnapshotObject(object):
     @property
     def order_book_id(self):
         """
-        【str】股票代码
+        [str] 股票代码
         """
         return self._instrument.order_book_id
 
     @property
     def prev_settlement(self):
         """
-        【float】昨日结算价（期货专用）
+        [float] 昨日结算价（期货专用）
         """
         return self._data['prev_settlement']
 
     @property
     def open_interest(self):
         """
-        【float】截止到当前的持仓量（期货专用）
+        [float] 截止到当前的持仓量（期货专用）
         """
         return self._data['open_interest']
 
@@ -166,6 +171,8 @@ class SnapshotObject(object):
         if isinstance(self._data, dict):
             # in pt
             base.extend([k, v] for k, v in six.iteritems(self._data) if k != 'datetime')
+        elif isinstance(self._data, Tick):
+            return repr(self._data).replace('Tick', 'Snapshot')
         else:
             base.extend((n, self._data[n]) for n in self._data.dtype.names if n != 'datetime')
         return "Snapshot({0})".format(', '.join('{0}: {1}'.format(k, v) for k, v in base))

@@ -23,14 +23,13 @@ from functools import wraps
 
 from dateutil.parser import parse as parse_date
 
-from .exception import RQInvalidArgument, RQTypeError
-from ..execution_context import ExecutionContext
-from ..model.instrument import Instrument
-from ..environment import Environment
-from ..const import INSTRUMENT_TYPE, RUN_TYPE
-from ..utils import unwrapper, INST_TYPE_IN_STOCK_ACCOUNT
-from ..utils.i18n import gettext as _
-from ..utils.logger import user_system_log
+from rqalpha.utils.exception import RQInvalidArgument, RQTypeError
+from rqalpha.model.instrument import Instrument
+from rqalpha.environment import Environment
+from rqalpha.const import INSTRUMENT_TYPE, EXC_TYPE
+from rqalpha.utils import unwrapper, INST_TYPE_IN_STOCK_ACCOUNT
+from rqalpha.utils.i18n import gettext as _
+from rqalpha.utils.exception import patch_system_exc, EXC_EXT_NAME
 
 
 main_contract_warning_flag = True
@@ -46,103 +45,94 @@ class ArgumentChecker(object):
         def check_is_instance_of(func_name, value):
             if not isinstance(value, types):
                 raise RQInvalidArgument(
-                    _('function {}: invalid {} argument, expect a value of type {}, got {} (type: {})').format(
+                    _(u"function {}: invalid {} argument, expect a value of type {}, got {} (type: {})").format(
                         func_name, self._arg_name, types, value, type(value)
                     ))
 
         self._rules.append(check_is_instance_of)
         return self
 
-    def raise_not_valid_instrument_error(self, func_name, arg_name, value):
+    def raise_invalid_instrument_error(self, func_name, arg_name, value):
         raise RQInvalidArgument(
-            _('function {}: invalid {} argument, expect a valid instrument/order_book_id/symbol, '
-              'got {} (type: {})').format(
+            _(u"function {}: invalid {} argument, expect a valid instrument/order_book_id/symbol, "
+              u"got {} (type: {})").format(
                 func_name, self._arg_name, value, type(value)
             ))
 
     def raise_not_valid_stock_error(self, func_name, arg_name, value):
         raise RQInvalidArgument(
-            _('function {}: invalid {} argument, expect a valid stock instrument/order_book_id/symbol, '
-              'got {} (type: {})').format(
+            _(u"function {}: invalid {} argument, expect a valid stock instrument/order_book_id/symbol, "
+              u"got {} (type: {})").format(
                 func_name, self._arg_name, value, type(value)
             ))
 
     def raise_not_valid_future_error(self, func_name, arg_name, value):
         raise RQInvalidArgument(
-            _('function {}: invalid {} argument, expect a valid future instrument/order_book_id/symbol, '
-              'got {} (type: {})').format(
+            _(u"function {}: invalid {} argument, expect a valid future instrument/order_book_id/symbol, "
+              u"got {} (type: {})").format(
                 func_name, self._arg_name, value, type(value)
             ))
 
     def _is_valid_instrument(self, func_name, value):
-        config = Environment.get_instance().config
-        global index_contract_warning_flag
+        instrument = None
         if isinstance(value, six.string_types):
-            if config.base.run_type == RUN_TYPE.PAPER_TRADING:
-                if "88" in value:
-                    raise RQInvalidArgument(_("Main Future contracts[88] are not supported in paper trading."))
-                if "99" in value:
-                    raise RQInvalidArgument(_("Index Future contracts[99] are not supported in paper trading."))
-            else:
-                if "88" in value:
-                    global main_contract_warning_flag
-                    if main_contract_warning_flag:
-                        main_contract_warning_flag = False
-                        user_system_log.warn(_("Main Future contracts[88] are not supported in paper trading."))
-                if "99" in value:
-                    global index_contract_warning_flag
-                    if index_contract_warning_flag:
-                        index_contract_warning_flag = False
-                        user_system_log.warn(_("Index Future contracts[99] are not supported in paper trading."))
-            instrument = ExecutionContext.get_data_proxy().instruments(value)
-            if instrument is None:
-                self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
-            return
+            instrument = Environment.get_instance().get_instrument(value)
+        elif isinstance(value, Instrument):
+            instrument = Instrument
 
-        if isinstance(value, Instrument):
-            return
+        if instrument is None:
+            self.raise_invalid_instrument_error(func_name, self._arg_name, value)
 
-        self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
+        # if instrument.type == 'Future' and ('88' in instrument.order_book_id or '99' in instrument.order_book_id):
+        #     config = Environment.get_instance().config
+        #     if config.base.run_type == RUN_TYPE.PAPER_TRADING:
+        #         if "88" in instrument.order_book_id:
+        #             raise RQInvalidArgument(_(u"Main Future contracts[88] are not supported in paper trading."))
+        #         if "99" in instrument.order_book_id:
+        #             raise RQInvalidArgument(_(u"Index Future contracts[99] are not supported in paper trading."))
+        #     else:
+        #         if "88" in instrument.order_book_id:
+        #             global main_contract_warning_flag
+        #             if main_contract_warning_flag:
+        #                 main_contract_warning_flag = False
+        #                 user_system_log.warn(_(u"Main Future contracts[88] are not supported in paper trading."))
+        #         if "99" in instrument.order_book_id:
+        #             global index_contract_warning_flag
+        #             if index_contract_warning_flag:
+        #                 index_contract_warning_flag = False
+        #                 user_system_log.warn(_(u"Index Future contracts[99] are not supported in paper trading."))
 
     def is_valid_instrument(self):
         self._rules.append(self._is_valid_instrument)
         return self
 
     def _is_valid_stock(self, func_name, value):
+        instrument = None
         if isinstance(value, six.string_types):
-            instrument = ExecutionContext.get_data_proxy().instruments(value)
-            if instrument is None:
-                self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
-            if instrument.enum_type not in INST_TYPE_IN_STOCK_ACCOUNT:
-                self.raise_not_valid_stock_error(func_name, self._arg_name, value)
-            return
+            instrument = Environment.get_instance().get_instrument(value)
+        elif isinstance(value, Instrument):
+            instrument = Instrument
 
-        if isinstance(value, Instrument):
-            if value.enum_type not in INST_TYPE_IN_STOCK_ACCOUNT:
-                self.raise_not_valid_stock_error(func_name, self._arg_name, value)
-            else:
-                return
-
-        self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
+        if instrument is None:
+            self.raise_invalid_instrument_error(func_name, self._arg_name, value)
+        if instrument.enum_type not in INST_TYPE_IN_STOCK_ACCOUNT:
+            self.raise_not_valid_stock_error(func_name, self._arg_name, value)
 
     def is_valid_stock(self):
         self._rules.append(self._is_valid_stock)
         return self
 
     def _is_valid_future(self, func_name, value):
+        instrument = None
         if isinstance(value, six.string_types):
-            instrument = ExecutionContext.get_data_proxy().instruments(value)
-            if instrument is None:
-                self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
-            if instrument.enum_type != INSTRUMENT_TYPE.FUTURE:
-                self.raise_not_valid_future_error(func_name, self._arg_name, value)
-            return
-        if isinstance(value, Instrument):
-            if value.enum_type != INSTRUMENT_TYPE.FUTURE:
-                self.raise_not_valid_future_error(func_name, self._arg_name, value)
-            else:
-                return
-        self.raise_not_valid_instrument_error(func_name, self._arg_name, value)
+            instrument = Environment.get_instance().get_instrument(value)
+        elif isinstance(value, Instrument):
+            instrument = Instrument
+
+        if instrument is None:
+            self.raise_invalid_instrument_error(func_name, self._arg_name, value)
+        if instrument.enum_type != INSTRUMENT_TYPE.FUTURE:
+            self.raise_not_valid_future_error(func_name, self._arg_name, value)
 
     def is_valid_future(self):
         self._rules.append(self._is_valid_future)
@@ -153,7 +143,7 @@ class ArgumentChecker(object):
             v = float(value)
         except ValueError:
             raise RQInvalidArgument(
-                _('function {}: invalid {} argument, expect a number, got {} (type: {})').format(
+                _(u"function {}: invalid {} argument, expect a number, got {} (type: {})").format(
                     func_name, self._arg_name, value, type(value))
             )
 
@@ -168,10 +158,9 @@ class ArgumentChecker(object):
 
             if value not in valid_values:
                 raise RQInvalidArgument(
-                    _('function {}: invalid {} argument, valid: {}, got {} (type: {})').format(
+                    _(u"function {}: invalid {} argument, valid: {}, got {} (type: {})").format(
                         func_name, self._arg_name, repr(valid_values), value, type(value))
                 )
-            return
 
         self._rules.append(check_is_in)
         return self
@@ -183,7 +172,7 @@ class ArgumentChecker(object):
             if isinstance(fields, six.string_types):
                 if fields not in valid_fields:
                     raise RQInvalidArgument(
-                        _('function {}: invalid {} argument, valid fields are {}, got {} (type: {})').format(
+                        _(u"function {}: invalid {} argument, valid fields are {}, got {} (type: {})").format(
                             func_name, self._arg_name, repr(valid_fields), fields, type(fields)
                         ))
                 return
@@ -195,14 +184,16 @@ class ArgumentChecker(object):
                 invalid_fields = [field for field in fields if field not in valid_fields]
                 if invalid_fields:
                     raise RQInvalidArgument(
-                        _('function {}: invalid field {}, valid fields are {}, got {} (type: {})').format(
+                        _(u"function {}: invalid field {}, valid fields are {}, got {} (type: {})").format(
                             func_name, invalid_fields, repr(valid_fields), fields, type(fields)
                         ))
+                return
 
             raise RQInvalidArgument(
-                _('function {}: invalid {} argument, expect a string or a list of string, got {} (type: {})').format(
+                _(u"function {}: invalid {} argument, expect a string or a list of string, got {} (type: {})").format(
                     func_name, self._arg_name, repr(fields), type(fields)
                 ))
+
         self._rules.append(check_are_valid_fields)
         return self
 
@@ -217,7 +208,7 @@ class ArgumentChecker(object):
             return
 
         raise RQInvalidArgument(
-            _('function {}: invalid {} argument, expect a string or a list of string, got {} (type: {})').format(
+            _(u"function {}: invalid {} argument, expect a string or a list of string, got {} (type: {})").format(
                 func_name, self._arg_name, repr(values), type(values)
             ))
 
@@ -234,35 +225,57 @@ class ArgumentChecker(object):
             if isinstance(value, six.string_types):
                 try:
                     v = parse_date(value)
+                    return
                 except ValueError:
                     raise RQInvalidArgument(
-                        _('function {}: invalid {} argument, expect a valid date, got {} (type: {})').format(
+                        _(u"function {}: invalid {} argument, expect a valid date, got {} (type: {})").format(
                             func_name, self._arg_name, value, type(value)
                         ))
 
             raise RQInvalidArgument(
-                _('function {}: invalid {} argument, expect a valid date, got {} (type: {})').format(
+                _(u"function {}: invalid {} argument, expect a valid date, got {} (type: {})").format(
                     func_name, self._arg_name, value, type(value)
                 ))
 
         self._rules.append(check_is_valid_date)
         return self
 
+    def is_greater_or_equal_than(self, low):
+        def check_greater_or_equal_than(func_name, value):
+            if value < low:
+                raise RQInvalidArgument(
+                    _(u"function {}: invalid {} argument, expect a value >= {}, got {} (type: {})").format(
+                        func_name, self._arg_name, low, value, type(value)
+                    ))
+        self._rules.append(check_greater_or_equal_than)
+        return self
+
     def is_greater_than(self, low):
         def check_greater_than(func_name, value):
             if value <= low:
                 raise RQInvalidArgument(
-                    _('function {}: invalid {} argument, expect a value > {}, got {} (type: {})').format(
+                    _(u"function {}: invalid {} argument, expect a value > {}, got {} (type: {})").format(
                         func_name, self._arg_name, low, value, type(value)
                     ))
         self._rules.append(check_greater_than)
+        return self
+
+    def is_less_or_equal_than(self, high):
+        def check_less_or_equal_than(func_name, value):
+            if value > high:
+                raise RQInvalidArgument(
+                    _(u"function {}: invalid {} argument, expect a value <= {}, got {} (type: {})").format(
+                        func_name, self._arg_name, high, value, type(value)
+                    ))
+
+        self._rules.append(check_less_or_equal_than)
         return self
 
     def is_less_than(self, high):
         def check_less_than(func_name, value):
             if value >= high:
                 raise RQInvalidArgument(
-                    _('function {}: invalid {} argument, expect a value < {}, got {} (type: {})').format(
+                    _(u"function {}: invalid {} argument, expect a value < {}, got {} (type: {})").format(
                         func_name, self._arg_name, high, value, type(value)
                     ))
 
@@ -279,8 +292,8 @@ class ArgumentChecker(object):
 
         if not valid:
             raise RQInvalidArgument(
-                _("function {}: invalid {} argument, interval should be in form of '1d', '3m', '4q', '2y', "
-                  "got {} (type: {})").format(
+                _(u"function {}: invalid {} argument, interval should be in form of '1d', '3m', '4q', '2y', "
+                  u"got {} (type: {})").format(
                     func_name, self.arg_name, value, type(value)
                 ))
 
@@ -288,13 +301,35 @@ class ArgumentChecker(object):
         self._rules.append(self._is_valid_interval)
         return self
 
+    def _is_valid_quarter(self, func_name, value):
+        if value is None:
+            valid = True
+        else:
+            valid = isinstance(value, six.string_types) and value[-2] == 'q'
+            if valid:
+                try:
+                    valid =  1990 <= int(value[:-2]) <= 2050 and 1 <= int(value[-1]) <= 4
+                except ValueError:
+                    valid = False
+
+        if not valid:
+            raise RQInvalidArgument(
+                _(u"function {}: invalid {} argument, quarter should be in form of '2012q3', "
+                  u"got {} (type: {})").format(
+                    func_name, self.arg_name, value, type(value)
+                ))
+
+    def is_valid_quarter(self):
+        self._rules.append(self._is_valid_quarter)
+        return self
+
     def _are_valid_query_entities(self, func_name, entities):
         from sqlalchemy.orm.attributes import InstrumentedAttribute
         for e in entities:
             if not isinstance(e, InstrumentedAttribute):
                 raise RQInvalidArgument(
-                    _("function {}: invalid {} argument, should be entity like "
-                      "Fundamentals.balance_sheet.total_equity, got {} (type: {})").format(
+                    _(u"function {}: invalid {} argument, should be entity like "
+                      u"Fundamentals.balance_sheet.total_equity, got {} (type: {})").format(
                         func_name, self.arg_name, e, type(e)
                     ))
 
@@ -303,7 +338,7 @@ class ArgumentChecker(object):
         return self
 
     def _is_valid_frequency(self, func_name, value):
-        valid = isinstance(value, six.string_types) and value[-1] in ('d', 'm')
+        valid = isinstance(value, six.string_types) and value[-1] in ("d", "m")
         if valid:
             try:
                 valid = int(value[:-1]) > 0
@@ -312,8 +347,8 @@ class ArgumentChecker(object):
 
         if not valid:
             raise RQInvalidArgument(
-                _("function {}: invalid {} argument, frequency should be in form of "
-                  "'1m', '5m', '1d', got {} (type: {})").format(
+                _(u"function {}: invalid {} argument, frequency should be in form of "
+                  u"'1m', '5m', '1d', got {} (type: {})").format(
                     func_name, self.arg_name, value, type(value)
                 ))
 
@@ -342,20 +377,25 @@ def apply_rules(*rules):
                 return func(*args, **kwargs)
             except RQInvalidArgument:
                 raise
-            except Exception:
+            except Exception as e:
                 exc_info = sys.exc_info()
                 t, v, tb = exc_info
 
                 try:
                     call_args = inspect.getcallargs(unwrapper(func), *args, **kwargs)
                 except TypeError as e:
-                    raise RQTypeError(*e.args).with_traceback(tb)
+                    six.reraise(RQTypeError, RQTypeError(*e.args), tb)
+                    return
 
                 try:
                     for r in rules:
                         r.verify(func.__name__, call_args[r.arg_name])
                 except RQInvalidArgument as e:
-                    raise e.with_traceback(tb)
+                    six.reraise(RQInvalidArgument, e, tb)
+                    return
+
+                if getattr(e, EXC_EXT_NAME, EXC_TYPE.NOTSET) == EXC_TYPE.NOTSET:
+                    patch_system_exc(e)
 
                 raise
 

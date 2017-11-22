@@ -14,13 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import namedtuple
-try:
-    # For Python 2 兼容
-    from functools import lru_cache
-except Exception as e:
-    from fastcache import lru_cache
 import datetime
+from collections import namedtuple
+
+from rqalpha.utils.py2 import lru_cache
 
 
 TimeRange = namedtuple('TimeRange', ['start', 'end'])
@@ -44,6 +41,11 @@ def get_month_end_time(time=None):
 def get_last_date(trading_calendar, dt):
     idx = trading_calendar.searchsorted(dt)
     return trading_calendar[idx - 1]
+
+
+def convert_date_to_date_int(dt):
+    t = dt.year * 10000 + dt.month * 100 + dt.day
+    return t
 
 
 def convert_date_to_int(dt):
@@ -82,3 +84,20 @@ def convert_int_to_datetime(dt_int):
     minute, second = divmod(r, 100)
     return datetime.datetime(year, month, day, hour, minute, second)
 
+
+def convert_ms_int_to_datetime(ms_dt_int):
+    dt_int, ms_int = divmod(ms_dt_int, 1000)
+    dt = convert_int_to_datetime(dt_int).replace(microsecond=ms_int * 1000)
+    return dt
+
+
+def convert_date_time_ms_int_to_datetime(date_int, time_int):
+    date_int, time_int = int(date_int), int(time_int)
+    dt = _convert_int_to_date(date_int)
+
+    hours, r = divmod(time_int, 10000000)
+    minutes, r = divmod(r, 100000)
+    seconds, millisecond = divmod(r, 1000)
+
+    return dt.replace(hour=hours, minute=minutes, second=seconds,
+                      microsecond=millisecond * 1000)

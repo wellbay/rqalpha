@@ -14,49 +14,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-'''
-更多描述请见
-https://www.ricequant.com/api/python/chn
-'''
-
 from __future__ import division
-import sys
+
 import datetime
 import inspect
+import sys
+from collections import Iterable
+from functools import wraps
+from types import FunctionType
+
 import pandas as pd
 import six
-from collections import Iterable
 from dateutil.parser import parse
-from types import FunctionType
-from functools import wraps
-from typing import List
 
-from ..environment import Environment
-from ..model.instrument import Instrument, SectorCode as sector_code, IndustryCode as industry_code
-from ..model.instrument import SectorCodeItem, IndustryCodeItem
-from ..execution_context import ExecutionContext
-from ..const import EXECUTION_PHASE, EXC_TYPE, ORDER_STATUS, SIDE, POSITION_EFFECT, ORDER_TYPE, MATCHING_TYPE, RUN_TYPE
-from ..utils import to_industry_code, to_sector_name, unwrapper
-from ..utils.exception import patch_user_exc, patch_system_exc, EXC_EXT_NAME, RQInvalidArgument
-from ..utils.i18n import gettext as _
-from ..model.snapshot import SnapshotObject
-from ..model.order import Order, MarketOrder, LimitOrder
-from ..model.slippage import PriceRatioSlippage
-from ..utils.arg_checker import apply_rules, verify_that
-from . import names
+from rqalpha.api import names
+from rqalpha.environment import Environment
+from rqalpha.execution_context import ExecutionContext
+from rqalpha.utils import to_industry_code, to_sector_name, unwrapper
+from rqalpha.utils.exception import patch_user_exc, patch_system_exc, EXC_EXT_NAME, RQInvalidArgument
+from rqalpha.utils.i18n import gettext as _
+# noinspection PyUnresolvedReferences
+from rqalpha.utils.logger import user_log as logger
+
+from rqalpha.model.instrument import SectorCodeItem, IndustryCodeItem
+from rqalpha.utils.arg_checker import apply_rules, verify_that
+# noinspection PyUnresolvedReferences
+from rqalpha.model.instrument import Instrument, SectorCode as sector_code, IndustryCode as industry_code
+# noinspection PyUnresolvedReferences
+from rqalpha.const import EXECUTION_PHASE, EXC_TYPE, ORDER_STATUS, SIDE, POSITION_EFFECT, ORDER_TYPE, MATCHING_TYPE, RUN_TYPE
+# noinspection PyUnresolvedReferences
+from rqalpha.model.order import Order, MarketOrder, LimitOrder, OrderStyle
+# noinspection PyUnresolvedReferences
+from rqalpha.events import EVENT
+
 
 __all__ = [
+    'logger',
     'sector_code',
     'industry_code',
     'LimitOrder',
     'MarketOrder',
-    'PriceRatioSlippage',
     'ORDER_STATUS',
     'SIDE',
     'POSITION_EFFECT',
     'ORDER_TYPE',
     'RUN_TYPE',
     'MATCHING_TYPE',
+    'EVENT',
 ]
 
 
@@ -111,7 +115,9 @@ def register_api(name, func):
 def export_as_api(func):
     __all__.append(func.__name__)
 
-    func = decorate_api_exc(func)
+    if isinstance(func, FunctionType):
+        func = decorate_api_exc(func)
+    globals()[func.__name__] = func
 
     return func
 
@@ -120,11 +126,27 @@ def assure_order_book_id(id_or_ins):
     if isinstance(id_or_ins, Instrument):
         order_book_id = id_or_ins.order_book_id
     elif isinstance(id_or_ins, six.string_types):
-        order_book_id = instruments(id_or_ins).order_book_id
+        order_book_id = Environment.get_instance().data_proxy.instruments(id_or_ins).order_book_id
     else:
-        raise RQInvalidArgument(_("unsupported order_book_id type"))
+        raise RQInvalidArgument(_(u"unsupported order_book_id type"))
 
     return order_book_id
+
+
+def cal_style(price, style):
+    if price is None and style is None:
+        return MarketOrder()
+
+    if style is not None:
+        if not isinstance(style, OrderStyle):
+            raise RuntimeError
+        return style
+
+    if isinstance(price, OrderStyle):
+        # 为了 order_xxx('RB1710', 10, MarketOrder()) 这种写法
+        return price
+
+    return LimitOrder(price)
 
 
 @export_as_api
@@ -133,11 +155,8 @@ def assure_order_book_id(id_or_ins):
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
-def get_order(order_id):
-    if isinstance(order_id, Order):
-        return order_id
-    else:
-        return ExecutionContext.account.get_order(order_id)
+def get_order(order):
+    return order
 
 
 @export_as_api
@@ -152,7 +171,7 @@ def get_open_orders():
 
     :return: List[:class:`~Order` object]
     """
-    return ExecutionContext.account.get_open_orders()
+    return Environment.get_instance().broker.get_open_orders()
 
 
 @export_as_api
@@ -160,7 +179,8 @@ def get_open_orders():
                                 EXECUTION_PHASE.ON_BAR,
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
-                                EXECUTION_PHASE.SCHEDULED)
+                                EXECUTION_PHASE.SCHEDULED,
+                                EXECUTION_PHASE.GLOBAL)
 def cancel_order(order):
     """
     撤单
@@ -168,10 +188,12 @@ def cancel_order(order):
     :param order: 需要撤销的order对象
     :type order: :class:`~Order` object
     """
-    order = order if isinstance(order, Order) else get_order(order)
     if order is None:
-        patch_user_exc(KeyError(_("Cancel order fail: invalid order id")))
-    ExecutionContext.broker.cancel_order(order)
+        patch_user_exc(KeyError(_(u"Cancel order fail: invalid order id")))
+    env = Environment.get_instance()
+    if env.can_cancel_order(order):
+        env.broker.cancel_order(order)
+    return order
 
 
 @export_as_api
@@ -192,7 +214,7 @@ def update_universe(id_or_symbols):
     if isinstance(id_or_symbols, (six.string_types, Instrument)):
         id_or_symbols = [id_or_symbols]
     order_book_ids = set(assure_order_book_id(order_book_id) for order_book_id in id_or_symbols)
-    if order_book_ids != Environment.get_instance().universe:
+    if order_book_ids != Environment.get_instance().get_universe():
         Environment.get_instance().update_universe(order_book_ids)
 
 
@@ -213,7 +235,7 @@ def subscribe(id_or_symbols):
     :param id_or_ins: 标的物
     :type id_or_ins: :class:`~Instrument` object | `str` | List[:class:`~Instrument`] | List[`str`]
     """
-    current_universe = Environment.get_instance().universe
+    current_universe = Environment.get_instance().get_universe()
     if isinstance(id_or_symbols, six.string_types):
         order_book_id = instruments(id_or_symbols).order_book_id
         current_universe.add(order_book_id)
@@ -223,7 +245,7 @@ def subscribe(id_or_symbols):
         for item in id_or_symbols:
             current_universe.add(assure_order_book_id(item))
     else:
-        raise RQInvalidArgument(_("unsupported order_book_id type"))
+        raise RQInvalidArgument(_(u"unsupported order_book_id type"))
     verify_that('id_or_symbols')._are_valid_instruments("subscribe", id_or_symbols)
     Environment.get_instance().update_universe(current_universe)
 
@@ -243,7 +265,7 @@ def unsubscribe(id_or_symbols):
     :param id_or_ins: 标的物
     :type id_or_ins: :class:`~Instrument` object | `str` | List[:class:`~Instrument`] | List[`str`]
     """
-    current_universe = Environment.get_instance().universe
+    current_universe = Environment.get_instance().get_universe()
     if isinstance(id_or_symbols, six.string_types):
         order_book_id = instruments(id_or_symbols).order_book_id
         current_universe.discard(order_book_id)
@@ -254,7 +276,7 @@ def unsubscribe(id_or_symbols):
             i = assure_order_book_id(item)
             current_universe.discard(i)
     else:
-        raise RQInvalidArgument(_("unsupported order_book_id type"))
+        raise RQInvalidArgument(_(u"unsupported order_book_id type"))
 
     Environment.get_instance().update_universe(current_universe)
 
@@ -297,10 +319,9 @@ def get_yield_curve(date=None, tenor=None):
         2013-01-04  0.0314  0.0318   ...    0.0342  0.0350  0.0353  0.0357  0.0361
         ...
     """
-    data_proxy = ExecutionContext.data_proxy
-    dt = ExecutionContext.get_current_trading_dt().date()
-
-    yesterday = data_proxy.get_previous_trading_date(dt)
+    env = Environment.get_instance()
+    trading_date = env.trading_dt.date()
+    yesterday = env.data_proxy.get_previous_trading_date(trading_date)
 
     if date is None:
         date = yesterday
@@ -309,7 +330,7 @@ def get_yield_curve(date=None, tenor=None):
         if date > yesterday:
             raise RQInvalidArgument('get_yield_curve: {} >= now({})'.format(date, yesterday))
 
-    return data_proxy.get_yield_curve(start_date=date, end_date=date, tenor=tenor)
+    return env.data_proxy.get_yield_curve(start_date=date, end_date=date, tenor=tenor)
 
 
 @export_as_api
@@ -320,10 +341,13 @@ def get_yield_curve(date=None, tenor=None):
                                 EXECUTION_PHASE.SCHEDULED)
 @apply_rules(verify_that('order_book_id').is_valid_instrument(),
              verify_that('bar_count').is_instance_of(int).is_greater_than(0),
-             verify_that('frequency').is_in(('1m', '1d')),
+             verify_that('frequency').is_valid_frequency(),
              verify_that('fields').are_valid_fields(names.VALID_HISTORY_FIELDS, ignore_none=True),
-             verify_that('skip_suspended').is_instance_of(bool))
-def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspended=True):
+             verify_that('skip_suspended').is_instance_of(bool),
+             verify_that('include_now').is_instance_of(bool),
+             verify_that('adjust_type').is_in({'pre', 'none', 'post'}))
+def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspended=True,
+                 include_now=False, adjust_type='pre'):
     """
     获取指定合约的历史行情，同时支持日以及分钟历史数据。不能在init中调用。 注意，该API会自动跳过停牌数据。
 
@@ -356,13 +380,11 @@ def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspende
     T日handle_bar                T日当前minute bar
     =========================   ===================================================
 
-    :param order_book_id: 合约代码或者合约代码列表
+    :param order_book_id: 合约代码
     :type order_book_id: `str`
 
     :param int bar_count: 获取的历史数据数量，必填项
-
     :param str frequency: 获取数据什么样的频率进行。'1d'或'1m'分别表示每日和每分钟，必填项
-
     :param str fields: 返回数据字段。必填项。见下方列表。
 
     =========================   ===================================================
@@ -375,12 +397,15 @@ def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspende
     close                       收盘价
     volume                      成交量
     total_turnover              成交额
-    datetime                    int类型时间戳
     open_interest               持仓量（期货专用）
     basis_spread                期现差（股指期货专用）
     settlement                  结算价（期货日线专用）
     prev_settlement             结算价（期货日线专用）
     =========================   ===================================================
+
+    :param bool skip_suspended: 是否跳过停牌数据
+    :param bool include_now: 是否包含当前数据
+    :param str adjust_type: 复权类型，默认为前复权 pre；可选 pre, none, post
 
     :return: `ndarray`, 方便直接与talib等计算库对接，效率较history返回的DataFrame更高。
 
@@ -397,18 +422,31 @@ def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspende
         [ 8.69  8.7   8.71  8.81  8.81]
     """
     order_book_id = assure_order_book_id(order_book_id)
-    data_proxy = ExecutionContext.data_proxy
-    dt = ExecutionContext.get_current_calendar_dt()
+    env = Environment.get_instance()
+    dt = env.calendar_dt
 
-    if frequency == '1m' and Environment.get_instance().config.base.frequency == '1d':
+    if frequency[-1] == 'm' and env.config.base.frequency == '1d':
         raise RQInvalidArgument('can not get minute history in day back test')
 
-    if (Environment.get_instance().config.base.frequency == '1m' and frequency == '1d') or \
-            (frequency == '1d' and ExecutionContext.get_active().phase == EXECUTION_PHASE.BEFORE_TRADING):
-        # 在分钟回测获取日线数据, 应该推前一天，这里应该使用 trading date
-        dt = data_proxy.get_previous_trading_date(ExecutionContext.get_current_trading_dt().date())
+    if adjust_type not in {'pre', 'post', 'none'}:
+        raise RuntimeError('invalid adjust_type')
 
-    return data_proxy.history_bars(order_book_id, bar_count, frequency, fields, dt, skip_suspended)
+    if frequency == '1d':
+        sys_frequency = Environment.get_instance().config.base.frequency
+        if ((sys_frequency in ['1m', 'tick'] and not include_now) or ExecutionContext.phase() == EXECUTION_PHASE.BEFORE_TRADING):
+            dt = env.data_proxy.get_previous_trading_date(env.trading_dt.date())
+            # 当 EXECUTION_PHASE.BEFORE_TRADING 的时候，强制 include_now 为 False
+            include_now = False
+        if sys_frequency == "1d":
+            # 日回测不支持 include_now
+            include_now = False
+
+    if fields is None:
+        fields = ["datetime", "open", "high", "low", "close", "volume"]
+
+    return env.data_proxy.history_bars(order_book_id, bar_count, frequency, fields, dt,
+                                       skip_suspended=skip_suspended, include_now=include_now,
+                                       adjust_type=adjust_type, adjust_orig=env.trading_dt)
 
 
 @export_as_api
@@ -418,12 +456,17 @@ def history_bars(order_book_id, bar_count, frequency, fields=None, skip_suspende
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
-@apply_rules(verify_that('type').is_in(names.VALID_INSTRUMENT_TYPES, ignore_none=True))
-def all_instruments(type=None):
+@apply_rules(verify_that('type').are_valid_fields(names.VALID_INSTRUMENT_TYPES, ignore_none=True),
+             verify_that('date').is_valid_date(ignore_none=True))
+def all_instruments(type=None, date=None):
     """
     获取某个国家市场的所有合约信息。使用者可以通过这一方法很快地对合约信息有一个快速了解，目前仅支持中国市场。
 
     :param str type: 需要查询合约类型，例如：type='CS'代表股票。默认是所有类型
+
+    :param date: 查询时间点
+    :type date: `str` | `datetime` | `date`
+
 
     :return: `pandas DataFrame` 所有合约的基本信息。
 
@@ -462,7 +505,36 @@ def all_instruments(type=None):
         ...
 
     """
-    return ExecutionContext.data_proxy.all_instruments(type)
+    env = Environment.get_instance()
+    if date is None:
+        dt = env.trading_dt
+    else:
+        dt = pd.Timestamp(date).to_pydatetime()
+        dt = min(dt, env.trading_dt)
+
+    if type is not None:
+        if isinstance(type, six.string_types):
+            type = [type]
+
+        types = set()
+        for t in type:
+            if t == 'Stock':
+                types.add('CS')
+            elif t == 'Fund':
+                types.update(['ETF', 'LOF', 'SF', 'FenjiA', 'FenjiB', 'FenjiMu'])
+            else:
+                types.add(t)
+    else:
+        types = None
+
+    result = [i for i in env.data_proxy.all_instruments(types, dt)
+              if i.type != 'CS' or not env.data_proxy.is_suspended(i.order_book_id, dt)]
+    if types is not None and len(types) == 1:
+        return pd.DataFrame([i.__dict__ for i in result])
+
+    return pd.DataFrame(
+        [[i.order_book_id, i.symbol, i.type, i.listed_date, i.de_listed_date] for i in result],
+        columns=['order_book_id', 'symbol', 'type', 'listed_date', 'de_listed_date'])
 
 
 @export_as_api
@@ -518,7 +590,7 @@ def instruments(id_or_symbols):
 
             instruments('IF1701').days_to_expire()
     """
-    return ExecutionContext.data_proxy.instruments(id_or_symbols)
+    return Environment.get_instance().data_proxy.instruments(id_or_symbols)
 
 
 @export_as_api
@@ -535,7 +607,7 @@ def sector(code):
     else:
         code = to_sector_name(code)
 
-    return ExecutionContext.data_proxy.sector(code)
+    return Environment.get_instance().data_proxy.sector(code)
 
 
 @export_as_api
@@ -552,7 +624,7 @@ def industry(code):
     else:
         code = to_industry_code(code)
 
-    return ExecutionContext.data_proxy.industry(code)
+    return Environment.get_instance().data_proxy.industry(code)
 
 
 @export_as_api
@@ -562,19 +634,8 @@ def industry(code):
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
-def concept(*concept_names):
-    return ExecutionContext.data_proxy.concept(*concept_names)
-
-
-@export_as_api
-@ExecutionContext.enforce_phase(EXECUTION_PHASE.ON_INIT,
-                                EXECUTION_PHASE.BEFORE_TRADING,
-                                EXECUTION_PHASE.ON_BAR,
-                                EXECUTION_PHASE.ON_TICK,
-                                EXECUTION_PHASE.AFTER_TRADING,
-                                EXECUTION_PHASE.SCHEDULED)
-@apply_rules(verify_that('start_date').is_valid_date(ignore_none=False))
-@apply_rules(verify_that('end_date').is_valid_date(ignore_none=False))
+@apply_rules(verify_that('start_date').is_valid_date(ignore_none=False),
+             verify_that('end_date').is_valid_date(ignore_none=False))
 def get_trading_dates(start_date, end_date):
     """
     获取某个国家市场的交易日列表（起止日期加入判断）。目前仅支持中国市场。
@@ -596,7 +657,7 @@ def get_trading_dates(start_date, end_date):
         [Out]
         [datetime.date(2016, 5, 5)]
     """
-    return ExecutionContext.data_proxy.get_trading_dates(start_date, end_date)
+    return Environment.get_instance().data_proxy.get_trading_dates(start_date, end_date)
 
 
 @export_as_api
@@ -606,13 +667,15 @@ def get_trading_dates(start_date, end_date):
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
-@apply_rules(verify_that('date').is_valid_date(ignore_none=False))
-def get_previous_trading_date(date):
+@apply_rules(verify_that('date').is_valid_date(ignore_none=False),
+             verify_that('n').is_instance_of(int).is_greater_or_equal_than(1))
+def get_previous_trading_date(date, n=1):
     """
-    获取指定日期的上一交易日。
+    获取指定日期的之前的第 n 个交易日。
 
     :param date: 指定日期
     :type date: `str` | `date` | `datetime` | `pandas.Timestamp`
+    :param n:
 
     :return: `datetime.date`
 
@@ -625,7 +688,7 @@ def get_previous_trading_date(date):
         [Out]
         [datetime.date(2016, 4, 29)]
     """
-    return ExecutionContext.data_proxy.get_previous_trading_date(date)
+    return Environment.get_instance().data_proxy.get_previous_trading_date(date, n)
 
 
 @export_as_api
@@ -635,13 +698,15 @@ def get_previous_trading_date(date):
                                 EXECUTION_PHASE.ON_TICK,
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
-@apply_rules(verify_that('date').is_valid_date(ignore_none=False))
-def get_next_trading_date(date):
+@apply_rules(verify_that('date').is_valid_date(ignore_none=False),
+             verify_that('n').is_instance_of(int).is_greater_or_equal_than(1))
+def get_next_trading_date(date, n=1):
     """
-    获取指定日期的下一交易日
+    获取指定日期之后的第 n 个交易日
 
     :param date: 指定日期
     :type date: `str` | `date` | `datetime` | `pandas.Timestamp`
+    :param n:
 
     :return: `datetime.date`
 
@@ -654,7 +719,7 @@ def get_next_trading_date(date):
         [Out]
         [datetime.date(2016, 5, 3)]
     """
-    return ExecutionContext.data_proxy.get_next_trading_date(date)
+    return Environment.get_instance().data_proxy.get_next_trading_date(date, n)
 
 
 def to_date(date):
@@ -666,7 +731,7 @@ def to_date(date):
             return date.date()
         except AttributeError:
             return date
-    
+
     raise RQInvalidArgument('unknown date value: {}'.format(date))
 
 
@@ -678,19 +743,25 @@ def to_date(date):
                                 EXECUTION_PHASE.AFTER_TRADING,
                                 EXECUTION_PHASE.SCHEDULED)
 @apply_rules(verify_that('order_book_id').is_valid_instrument(),
-             verify_that('start_date').is_valid_date(ignore_none=False),
-             verify_that('adjusted').is_instance_of(bool))
-def get_dividend(order_book_id, start_date, adjusted=True):
-    dt = ExecutionContext.get_current_trading_dt().date() - datetime.timedelta(days=1)
+             verify_that('start_date').is_valid_date(ignore_none=False))
+def get_dividend(order_book_id, start_date, *args, **kwargs):
+    # adjusted 参数在不复权数据回测时不再提供
+    env = Environment.get_instance()
+    dt = env.trading_dt.date() - datetime.timedelta(days=1)
     start_date = to_date(start_date)
     if start_date > dt:
         raise RQInvalidArgument(
-            _('in get_dividend, start_date {} is later than the previous test day {}').format(
+            _(u"in get_dividend, start_date {} is later than the previous test day {}").format(
                 start_date, dt
             ))
     order_book_id = assure_order_book_id(order_book_id)
-    df = ExecutionContext.data_proxy.get_dividend(order_book_id, adjusted)
-    return df[start_date:dt]
+    array = env.data_proxy.get_dividend(order_book_id)
+    if array is None:
+        return None
+
+    sd = start_date.year * 10000 + start_date.month * 100 + start_date.day
+    ed = dt.year * 10000 + dt.month * 100 + dt.day
+    return array[(array['announcement_date'] >= sd) & (array['announcement_date'] <= ed)]
 
 
 @export_as_api
@@ -706,11 +777,7 @@ def plot(series_name, value):
     :param float value: the value of the series in this time
     :return: None
     """
-    if ExecutionContext.plots is None:
-        # FIXME: this is ugly
-        from ..utils.plot_store import PlotStore
-        ExecutionContext.plots = PlotStore()
-    ExecutionContext.plots.add_plot(ExecutionContext.trading_dt.date(), series_name, value)
+    Environment.get_instance().add_plot(series_name, value)
 
 
 @export_as_api
@@ -739,10 +806,7 @@ def current_snapshot(id_or_symbol):
         2016-01-04 09:33:00.00  INFO
         Snapshot(order_book_id: '000001.XSHE', datetime: datetime.datetime(2016, 1, 4, 9, 33), open: 10.0, high: 10.025, low: 9.9667, last: 9.9917, volume: 2050320, total_turnover: 20485195, prev_close: 9.99)
     """
-    data_proxy = ExecutionContext.data_proxy
-    cal_dt = ExecutionContext.get_current_calendar_dt()
-
-    frequency = Environment.get_instance().config.base.frequency
-
+    env = Environment.get_instance()
+    frequency = env.config.base.frequency
     order_book_id = assure_order_book_id(id_or_symbol)
-    return data_proxy.current_snapshot(order_book_id, frequency, cal_dt)
+    return env.data_proxy.current_snapshot(order_book_id, frequency, env.calendar_dt)

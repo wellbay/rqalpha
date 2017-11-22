@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pandas as pd
 import six
 
 
@@ -24,11 +23,15 @@ class InstrumentMixin(object):
         self._sym_id_map = {i.symbol: k for k, i in six.iteritems(self._instruments)
                             # 过滤掉 CSI300, SSE50, CSI500, SSE180
                             if not i.order_book_id.endswith('INDX')}
-        # 沪深300 中证500 固定使用上证的
-        for o in ['000300.XSHG', '000905.XSHG']:
-            self._sym_id_map[self._instruments[o].symbol] = o
-        # 上证180 及 上证180指数 两个symbol都指向 000010.XSHG
-        self._sym_id_map[self._instruments['SSE180.INDX'].symbol] = '000010.XSHG'
+        try:
+            # FIXME
+            # 沪深300 中证500 固定使用上证的
+            for o in ['000300.XSHG', '000905.XSHG']:
+                self._sym_id_map[self._instruments[o].symbol] = o
+            # 上证180 及 上证180指数 两个symbol都指向 000010.XSHG
+            self._sym_id_map[self._instruments['SSE180.INDX'].symbol] = '000010.XSHG'
+        except KeyError:
+            pass
 
     def sector(self, code):
         return [v.order_book_id for v in self._instruments.values()
@@ -38,20 +41,10 @@ class InstrumentMixin(object):
         return [v.order_book_id for v in self._instruments.values()
                 if v.type == 'CS' and v.industry_code == code]
 
-    def concept(self, *concepts):
-        return [v.order_book_id for v in self._instruments.values()
-                if v.type == 'CS' and any(c in v.concept_names.split('|') for c in concepts)]
-
-    def all_instruments(self, itype='CS'):
-        if itype is None:
-            return pd.DataFrame([[v.order_book_id, v.symbol, v.abbrev_symbol, v.type]
-                                 for v in self._instruments.values()],
-                                columns=['order_book_id', 'symbol', 'abbrev_symbol', 'type'])
-
-        if itype not in ['CS', 'ETF', 'LOF', 'FenjiA', 'FenjiB', 'FenjiMu', 'INDX', 'Future']:
-            raise ValueError('Unknown type {}'.format(itype))
-
-        return pd.DataFrame([v.__dict__ for v in self._instruments.values() if v.type == itype])
+    def all_instruments(self, types, dt=None):
+        return [i for i in self._instruments.values()
+                if ((dt is None or i.listed_date.date() <= dt.date() <= i.de_listed_date.date()) and
+                    (types is None or i.type in types))]
 
     def _instrument(self, sym_or_id):
         try:
@@ -70,6 +63,7 @@ class InstrumentMixin(object):
         return [i for i in [self._instrument(sid) for sid in sym_or_ids] if i is not None]
 
     def get_future_contracts(self, underlying, date):
+        date = date.replace(hour=0, minute=0, second=0)
         futures = [v for o, v in six.iteritems(self._instruments)
                    if v.type == 'Future' and v.underlying_symbol == underlying and
                    not o.endswith('88') and not o.endswith('99')]
